@@ -96,8 +96,10 @@ export class Note {
         const p = {
           pos: new THREE.Vector3(wx, wy, wz),
           oldPos: new THREE.Vector3(wx, wy, wz),
+          renderPos: new THREE.Vector3(wx, wy, wz),
           acc: new THREE.Vector3(),
           pinned: isPinned,
+          isSpawning: true,
           localY: Math.abs(ly) / CONFIG.height,
           noteId,
           targetX: finalX,
@@ -157,7 +159,17 @@ export class Note {
     for (let i = 0; i < positions.count; i += 1) {
       const pIdx = this.vertexMap[i];
       const p = this.particles[pIdx];
-      positions.setXYZ(i, p.pos.x, p.pos.y, p.pos.z);
+      if (!p.renderPos) {
+        p.renderPos = p.pos.clone();
+      }
+
+      if (p.pinned) {
+        p.renderPos.copy(p.pos);
+      } else {
+        p.renderPos.lerp(p.pos, CONFIG.physics.renderLerp);
+      }
+
+      positions.setXYZ(i, p.renderPos.x, p.renderPos.y, p.renderPos.z);
     }
     positions.needsUpdate = true;
     this.mesh.geometry.computeVertexNormals();

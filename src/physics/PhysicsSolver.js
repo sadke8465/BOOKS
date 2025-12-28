@@ -59,6 +59,11 @@ export class PhysicsSolver {
           p.pos.y = p.targetY + currentOffsetY;
           p.pos.z = p.targetZ + currentOffsetZ;
           p.oldPos.copy(p.pos);
+          p.isSpawning = note.isSpawning;
+        });
+      } else if (note.spawnTimer > 0) {
+        note.glueParticles.forEach((p) => {
+          p.isSpawning = false;
         });
       }
     });
@@ -70,7 +75,11 @@ export class PhysicsSolver {
         const p = state.allParticles[i];
 
         if (p.pinned) {
-          p.pos.z = p.targetZ;
+          if (!p.isSpawning) {
+            p.pos.set(p.targetX, p.targetY, p.targetZ);
+          }
+          p.oldPos.copy(p.pos);
+          p.acc.set(0, 0, 0);
           continue;
         }
 
@@ -117,38 +126,64 @@ export class PhysicsSolver {
 
         if (p.pos.z < 0) {
           p.pos.z = 0;
-          p.oldPos.x =
-            p.pos.x - (p.pos.x - p.oldPos.x) * CONFIG.physics.boundaryDampen;
+          p.oldPos.z =
+            p.pos.z - (p.pos.z - p.oldPos.z) * CONFIG.physics.boundaryDampen;
         }
       }
 
-      if (s % 4 === 0) {
+      if (s % CONFIG.physics.stackInterval === 0) {
         enforceStackOrder(state.allParticles, this.spatialHash, state.collisionThickness);
       }
 
-      for (let i = 0; i < state.allConstraints.length; i += 1) {
-        const c = state.allConstraints[i];
-        const diff = c.p2.pos.clone().sub(c.p1.pos);
-        const dist = diff.length();
-        if (dist === 0) continue;
+      for (let iter = 0; iter < CONFIG.physics.constraintIterations; iter += 1) {
+        for (let i = 0; i < state.allConstraints.length; i += 1) {
+          const c = state.allConstraints[i];
+          const diff = c.p2.pos.clone().sub(c.p1.pos);
+          const dist = diff.length();
+          if (dist === 0) continue;
 
-        const stiff = c.stiffness * state.paperStiffness;
-        const correction = ((dist - c.dist) / dist) * CONFIG.physics.constraintCorrection * stiff;
-        const offset = diff.multiplyScalar(correction);
+          const stiff = c.stiffness * state.paperStiffness;
+          const correction =
+            ((dist - c.dist) / dist) * CONFIG.physics.constraintCorrection * stiff;
+          const offset = diff.multiplyScalar(correction);
 
-        const m1 = c.p1.pinned ? 0 : 0.5;
-        const m2 = c.p2.pinned ? 0 : 0.5;
+          const m1 = c.p1.pinned ? 0 : 0.5;
+          const m2 = c.p2.pinned ? 0 : 0.5;
 
-        if (!c.p1.pinned) c.p1.pos.add(offset.clone().multiplyScalar(m1));
-        if (!c.p2.pinned) c.p2.pos.sub(offset.clone().multiplyScalar(m2));
+          if (!c.p1.pinned) c.p1.pos.add(offset.clone().multiplyScalar(m1));
+          if (!c.p2.pinned) c.p2.pos.sub(offset.clone().multiplyScalar(m2));
+        }
       }
 
-      if (s % 2 === 0) {
-        resolveCollisions(state.allParticles, this.spatialHash, state.collisionThickness);
+      if (s % CONFIG.physics.collisionInterval === 0) {
+        for (let iter = 0; iter < CONFIG.physics.collisionIterations; iter += 1) {
+          resolveCollisions(state.allParticles, this.spatialHash, state.collisionThickness);
+        }
       }
+
+      this.applyRestDamping(state);
     }
 
     this.updateDebugGrid();
+  }
+
+  applyRestDamping(state) {
+    const sleepVelSq = CONFIG.physics.sleepVelocity * CONFIG.physics.sleepVelocity;
+    for (let i = 0; i < state.allParticles.length; i += 1) {
+      const p = state.allParticles[i];
+      if (p.pinned) continue;
+
+      const vel = p.pos.clone().sub(p.oldPos);
+      const velSq = vel.lengthSq();
+
+      if (velSq < sleepVelSq) {
+        p.oldPos.copy(p.pos);
+        continue;
+      }
+
+      vel.multiplyScalar(CONFIG.physics.velocityDamping);
+      p.oldPos.copy(p.pos.clone().sub(vel));
+    }
   }
 
   updateDebugGrid() {

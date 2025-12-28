@@ -27,6 +27,8 @@ export function checkGlueOverlap(x, y, notes) {
 }
 
 export function enforceStackOrder(allParticles, spatialHash, collisionThickness) {
+  const effectiveRadius = CONFIG.collisionRadius + CONFIG.collisions.radiusPadding;
+  const effectiveThickness = collisionThickness + CONFIG.collisions.thicknessPadding;
   spatialHash.clear();
   for (let i = 0; i < allParticles.length; i += 1) {
     spatialHash.insert(allParticles[i]);
@@ -47,15 +49,12 @@ export function enforceStackOrder(allParticles, spatialHash, collisionThickness)
       const dx = p2.pos.x - p1.pos.x;
       const dy = p2.pos.y - p1.pos.y;
 
-      if (
-        Math.abs(dx) > CONFIG.collisionRadius ||
-        Math.abs(dy) > CONFIG.collisionRadius
-      ) {
+      if (Math.abs(dx) > effectiveRadius || Math.abs(dy) > effectiveRadius) {
         continue;
       }
 
       const distSq = dx * dx + dy * dy;
-      if (distSq < CONFIG.collisionRadius * CONFIG.collisionRadius) {
+      if (distSq < effectiveRadius * effectiveRadius) {
         let pBottom;
         let pTop;
         if (p1.noteId < p2.noteId) {
@@ -67,7 +66,7 @@ export function enforceStackOrder(allParticles, spatialHash, collisionThickness)
         }
 
         const currentZGap = pTop.pos.z - pBottom.pos.z;
-        const minGap = collisionThickness;
+        const minGap = effectiveThickness;
 
         if (currentZGap < minGap) {
           const penetration = minGap - currentZGap;
@@ -89,6 +88,8 @@ export function enforceStackOrder(allParticles, spatialHash, collisionThickness)
 }
 
 export function resolveCollisions(allParticles, spatialHash, collisionThickness) {
+  const effectiveRadius = CONFIG.collisionRadius + CONFIG.collisions.radiusPadding;
+  const effectiveThickness = collisionThickness + CONFIG.collisions.thicknessPadding;
   spatialHash.clear();
   for (let i = 0; i < allParticles.length; i += 1) {
     spatialHash.insert(allParticles[i]);
@@ -107,15 +108,12 @@ export function resolveCollisions(allParticles, spatialHash, collisionThickness)
 
       const dx = p2.pos.x - p1.pos.x;
       const dy = p2.pos.y - p1.pos.y;
-      if (
-        Math.abs(dx) > CONFIG.collisionRadius ||
-        Math.abs(dy) > CONFIG.collisionRadius
-      ) {
+      if (Math.abs(dx) > effectiveRadius || Math.abs(dy) > effectiveRadius) {
         continue;
       }
 
       const distSq = dx * dx + dy * dy;
-      if (distSq < CONFIG.collisionRadius * CONFIG.collisionRadius) {
+      if (distSq < effectiveRadius * effectiveRadius) {
         let pOld;
         let pNew;
         if (p1.noteId < p2.noteId) {
@@ -128,8 +126,8 @@ export function resolveCollisions(allParticles, spatialHash, collisionThickness)
 
         const currentZDiff = pNew.pos.z - pOld.pos.z;
 
-        if (currentZDiff < collisionThickness) {
-          const penetration = collisionThickness - currentZDiff;
+        if (currentZDiff < effectiveThickness) {
+          const penetration = effectiveThickness - currentZDiff;
 
           if (pOld.pinned && pNew.pinned) {
             pNew.pos.z += penetration * CONFIG.collisions.pinnedPinnedBoost;

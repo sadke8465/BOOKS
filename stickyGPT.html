@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Cascading Physics Notes</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        canvas { display: block; touch-action: none; }
+        
+        #ui {
+            position: absolute; top: 10px; left: 10px; color: #333;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; 
+            font-size: 13px;
+            background: rgba(255, 255, 255, 0.90);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            backdrop-filter: blur(8px);
+            pointer-events: auto; 
+            user-select: none;
+            width: 260px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            transition: height 0.3s ease;
+        }
+
+        /* Header */
+        .ui-header {
+            padding: 12px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .toggle-btn {
+            background: none; border: none; font-size: 18px; cursor: pointer; color: #555;
+            width: 20px; height: 20px; line-height: 20px; text-align: center; padding: 0;
+        }
+
+        /* Tabs */
+        .tabs { display: flex; background: rgba(0,0,0,0.03); border-bottom: 1px solid #ddd; }
+        .tab-btn {
+            flex: 1; border: none; background: none; padding: 10px 0;
+            font-size: 11px; font-weight: 600; text-transform: uppercase; color: #888;
+            cursor: pointer; border-bottom: 2px solid transparent; transition: 0.2s;
+        }
+        .tab-btn.active { color: #333; border-bottom: 2px solid #333; background: rgba(255,255,255,0.5); }
+
+        /* Content */
+        #ui-body { overflow-y: auto; padding: 15px; display: block; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .control-group { margin-bottom: 12px; }
+        .control-group label { display: flex; justify-content: space-between; margin-bottom: 4px; font-weight: 600; font-size: 12px;}
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        /* Clear Button */
+        .action-row { margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;}
+        .status { font-size: 11px; color: #666; }
+        .btn-clear {
+            background: #ffecb3; color: #d84315; border: 1px solid #ffcc80;
+            padding: 6px 12px; border-radius: 4px; font-size: 11px; font-weight: 700;
+            cursor: pointer; transition: 0.2s;
+        }
+        .btn-clear:hover { background: #ffe082; }
+        .btn-clear:active { transform: translateY(1px); }
+
+        /* Toggle Switch for Debug */
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+        .toggle-switch { position: relative; display: inline-block; width: 34px; height: 18px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #2196F3; }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        /* Minimized State */
+        #ui.minimized #ui-body, #ui.minimized .tabs { display: none; }
+        #ui.minimized { width: auto; min-width: 120px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="ui-header" id="uiHeader">
+            <span>Settings</span>
+            <button class="toggle-btn" id="toggleUI">−</button>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="physics">Physics</button>
+            <button class="tab-btn" data-tab="paper">Paper</button>
+            <button class="tab-btn" data-tab="mesh">Mesh</button> 
+            <button class="tab-btn" data-tab="other">Other</button>
+        </div>
+
+        <div id="ui-body">
+            <div id="physics" class="tab-content active">
+                <div class="control-group">
+                    <label>Gravity</label>
+                    <input type="range" id="gravity" min="-20" max="-0.5" step="0.5" value="-5">
+                </div>
+                <div class="control-group">
+                    <label>Friction (Air Drag)</label>
+                    <input type="range" id="friction" min="0.80" max="0.99" step="0.005" value="0.92">
+                </div>
+            </div>
+
+            <div id="paper" class="tab-content">
+                <div class="control-group">
+                    <label>Note Thickness</label>
+                    <input type="range" id="thickness" min="0.001" max="0.1" step="0.001" value="0.04">
+                </div>
+                <div class="control-group">
+                    <label>Paper Stiffness</label>
+                    <input type="range" id="stiffness" min="0.5" max="2.0" step="0.1" value="1.2">
+                </div>
+            </div>
+
+            <div id="mesh" class="tab-content">
+                <div class="control-group">
+                    <label>Grid Resolution (New Notes) <span id="resVal">6</span></label>
+                    <input type="range" id="meshRes" min="2" max="12" step="1" value="6">
+                </div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                <div class="control-group">
+                    <div class="toggle-row">
+                        <span style="font-size:12px; font-weight:600;">Show Debug Grid</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="debugToggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="margin-top:5px; font-size:10px; color:#666;">
+                        <span style="color:red;">●</span> Pinned &nbsp; <span style="color:green;">●</span> Free
+                    </div>
+                </div>
+            </div>
+
+            <div id="other" class="tab-content">
+                <div class="control-group">
+                    <label>Zoom</label>
+                    <input type="range" id="zoom" min="4" max="25" step="0.1" value="10">
+                </div>
+                <div class="control-group">
+                    <label>Spawn Duration</label>
+                    <input type="range" id="duration" min="0.1" max="2.0" step="0.1" value="0.45">
+                </div>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                
+                <div class="control-group">
+                    <label>Wind Intensity</label>
+                    <input type="range" id="wind" min="0" max="5" step="0.1" value="1.0">
+                </div>
+                <div class="control-group">
+                    <label>Wind Speed</label>
+                    <input type="range" id="windSpeed" min="0" max="4" step="0.1" value="1.0">
+                </div>
+                <div class="control-group">
+                    <label>Ripple Freq</label>
+                    <input type="range" id="flutter" min="1" max="20" step="1" value="10">
+                </div>
+                <div class="control-group">
+                    <label>Direction X</label>
+                    <input type="range" id="windDirX" min="-1" max="1" step="0.1" value="0.8">
+                </div>
+                <div class="control-group">
+                    <label>Direction Y</label>
+                    <input type="range" id="windDirY" min="-1" max="1" step="0.1" value="0.4">
+                </div>
+            </div>
+
+            <div class="action-row">
+                <span class="status" id="status">Notes: 1</span>
+                <button class="btn-clear" id="clearBtn">Clear All</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            width: 1.3,
+            height: 1.3,
+            segs: 6, // Default resolution
+            glueRatio: 0.20,
+            
+            // Physics Defaults
+            collisionRadius: 0.16, 
+            collisionThickness: 0.04, 
+            stackStep: 0.003, 
+            substeps: 20, // Increased for better stability
+            maxSubstepVelocity: 0.1, 
+            
+            spawnOffsetY: 4.0, 
+            spawnOffsetZ: 3.0, 
+            spawnDuration: 0.45 
+        };
+
+        const PALETTE = [
+            0xffeb3b, // Yellow
+            0xff80ab, // Pink
+            0x80d8ff, // Blue
+            0xccff90, // Green
+            0xffd180  // Orange
+        ];
+
+        // --- GLOBAL STATE ---
+        let allParticles = [];
+        let allConstraints = [];
+        let notes = [];
+        let interactableObjects = []; 
+
+        // Dynamic Physics State
+        let GRAVITY = new THREE.Vector3(0, -5, 0); 
+        let FRICTION = 0.92;
+        let WIND_MULTIPLIER = 1.0;
+        let WIND_SPEED = 1.0;
+        let WIND_DIR_X = 0.8;
+        let WIND_DIR_Y = 0.4;
+        let PAPER_STIFFNESS = 1.2;
+        let FLUTTER_FREQ = 10.0;
+        let windTime = 0; 
+        
+        // Debug State
+        let DEBUG_MODE = false;
+        let debugPointsMesh = null;
+
+        const spatialHash = {
+            cellSize: 0.35,
+            grid: new Map(),
+            key: function(x, y) {
+                return `${Math.floor(x/this.cellSize)},${Math.floor(y/this.cellSize)}`;
+            },
+            clear: function() { this.grid.clear(); },
+            insert: function(p) {
+                const k = this.key(p.pos.x, p.pos.y);
+                if (!this.grid.has(k)) this.grid.set(k, []);
+                this.grid.get(k).push(p);
+            },
+            query: function(p, out) {
+                const cx = Math.floor(p.pos.x / this.cellSize);
+                const cy = Math.floor(p.pos.y / this.cellSize);
+                for (let x = -1; x <= 1; x++) {
+                    for (let y = -1; y <= 1; y++) {
+                        const cell = this.grid.get(`${cx+x},${cy+y}`);
+                        if (cell) for(let i=0; i<cell.length; i++) out.push(cell[i]);
+                    }
+                }
+            }
+        };
+
+        // --- SCENE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xebebeb);
+
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 10);
+        const cameraTarget = new THREE.Vector3(0, 0, 0);
+        camera.lookAt(cameraTarget);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); 
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; 
+        document.body.appendChild(renderer.domElement);
+
+        // --- INPUT & CASCADING LOGIC ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        function checkGlueOverlap(x, y) {
+            const glueH = CONFIG.height * CONFIG.glueRatio;
+            const halfW = CONFIG.width / 2;
+
+            for (let i = 0; i < notes.length; i++) {
+                const note = notes[i];
+                const dx = x - note.centerX;
+                const dy = y - note.centerY;
+                const cos = Math.cos(-note.rotationZ);
+                const sin = Math.sin(-note.rotationZ);
+                const localX = dx * cos - dy * sin;
+                const localY = dx * sin + dy * cos;
+
+                if (localX >= -halfW && localX <= halfW && 
+                    localY <= 0.05 && localY >= -(glueH + 0.05)) { 
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function enforceStackOrder() {
+            spatialHash.clear();
+            for(let i=0; i<allParticles.length; i++) spatialHash.insert(allParticles[i]);
+            
+            const neighbors = [];
+            
+            for (let i = 0; i < allParticles.length; i++) {
+                const p1 = allParticles[i];
+                neighbors.length = 0;
+                spatialHash.query(p1, neighbors);
+
+                for (let j = 0; j < neighbors.length; j++) {
+                    const p2 = neighbors[j];
+                    if (p1 === p2) continue;
+                    if (p1.noteId === p2.noteId) continue; 
+
+                    const dx = p2.pos.x - p1.pos.x;
+                    const dy = p2.pos.y - p1.pos.y;
+                    
+                    if (Math.abs(dx) > CONFIG.collisionRadius || Math.abs(dy) > CONFIG.collisionRadius) continue;
+
+                    const distSq = dx*dx + dy*dy;
+                    if (distSq < CONFIG.collisionRadius * CONFIG.collisionRadius) {
+                        
+                        let pBottom, pTop;
+                        if (p1.noteId < p2.noteId) {
+                            pBottom = p1; pTop = p2;
+                        } else {
+                            pBottom = p2; pTop = p1;
+                        }
+
+                        const currentZGap = pTop.pos.z - pBottom.pos.z;
+                        const minGap = CONFIG.collisionThickness;
+
+                        if (currentZGap < minGap) {
+                            const penetration = minGap - currentZGap;
+                            
+                            if (pBottom.pinned) {
+                                pTop.pos.z += penetration;
+                            } 
+                            else if (pTop.pinned) {
+                                pBottom.pos.z -= penetration;
+                            } 
+                            else {
+                                pBottom.pos.z -= penetration * 0.8;
+                                pTop.pos.z += penetration * 0.2;
+                            }
+                            
+                            if (pBottom.pos.z < 0) pBottom.pos.z = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        function handleInput(clientX, clientY) {
+            const ui = document.getElementById('ui');
+            const rect = ui.getBoundingClientRect();
+            if (clientX >= rect.left && clientX <= rect.right &&
+                clientY >= rect.top && clientY <= rect.bottom && !ui.classList.contains('minimized')) {
+                    if (clientY > rect.top + 50) return; 
+            }
+
+            mouse.x = (clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(interactableObjects);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                let spawnX = hit.point.x;
+                let spawnY = hit.point.y;
+                
+                let attempts = 0;
+                while (checkGlueOverlap(spawnX, spawnY) && attempts < 5) {
+                    spawnY -= (CONFIG.height * CONFIG.glueRatio * 1.05);
+                    attempts++;
+                }
+
+                const logicalZ = (notes.length * CONFIG.stackStep) + 0.005;
+                const angle = THREE.MathUtils.degToRad(Math.random() * 10 - 5); 
+                
+                createNote(spawnX, spawnY, logicalZ, angle);
+                document.getElementById('status').innerText = "Notes: " + notes.length;
+            }
+        }
+
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#ui')) return;
+            handleInput(e.clientX, e.clientY)
+        });
+        renderer.domElement.addEventListener('touchstart', (e) => {
+            if (e.target.closest('#ui')) return;
+            e.preventDefault(); 
+            if (e.touches.length > 0) handleInput(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+
+        // --- UI & TABS ---
+        const tabs = document.querySelectorAll('.tab-btn');
+        const contents = document.querySelectorAll('.tab-content');
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                contents.forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        const toggleBtn = document.getElementById('toggleUI');
+        const uiPanel = document.getElementById('ui');
+        toggleBtn.addEventListener('click', () => {
+            uiPanel.classList.toggle('minimized');
+            toggleBtn.textContent = uiPanel.classList.contains('minimized') ? '+' : '−';
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            notes.forEach(n => {
+                scene.remove(n.mesh);
+                n.mesh.geometry.dispose();
+            });
+            
+            notes = [];
+            allParticles = [];
+            allConstraints = [];
+            interactableObjects = [wall]; 
+            spatialHash.clear();
+
+            if (debugPointsMesh) {
+                scene.remove(debugPointsMesh);
+                debugPointsMesh.geometry.dispose();
+                debugPointsMesh = null;
+            }
+
+            document.getElementById('status').innerText = "Notes: 0";
+        });
+
+        // --- CONTROLS ---
+        document.getElementById('zoom').addEventListener('input', (e) => {
+            camera.position.z = parseFloat(e.target.value);
+            camera.lookAt(cameraTarget);
+        });
+        document.getElementById('duration').addEventListener('input', (e) => CONFIG.spawnDuration = parseFloat(e.target.value));
+        document.getElementById('gravity').addEventListener('input', (e) => GRAVITY.y = parseFloat(e.target.value));
+        document.getElementById('friction').addEventListener('input', (e) => FRICTION = parseFloat(e.target.value));
+        document.getElementById('stiffness').addEventListener('input', (e) => PAPER_STIFFNESS = parseFloat(e.target.value));
+        document.getElementById('thickness').addEventListener('input', (e) => CONFIG.collisionThickness = parseFloat(e.target.value));
+        document.getElementById('wind').addEventListener('input', (e) => WIND_MULTIPLIER = parseFloat(e.target.value));
+        document.getElementById('windSpeed').addEventListener('input', (e) => WIND_SPEED = parseFloat(e.target.value));
+        document.getElementById('flutter').addEventListener('input', (e) => FLUTTER_FREQ = parseFloat(e.target.value));
+        document.getElementById('windDirX').addEventListener('input', (e) => WIND_DIR_X = parseFloat(e.target.value));
+        document.getElementById('windDirY').addEventListener('input', (e) => WIND_DIR_Y = parseFloat(e.target.value));
+        
+        // New Mesh Controls
+        document.getElementById('meshRes').addEventListener('input', (e) => {
+            CONFIG.segs = parseInt(e.target.value);
+            document.getElementById('resVal').innerText = CONFIG.segs;
+        });
+        document.getElementById('debugToggle').addEventListener('change', (e) => {
+            DEBUG_MODE = e.target.checked;
+            if (!DEBUG_MODE && debugPointsMesh) {
+                scene.remove(debugPointsMesh);
+                debugPointsMesh.geometry.dispose();
+                debugPointsMesh = null;
+            }
+        });
+
+        // --- LIGHTING ---
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+        sun.position.set(5, 5, 10); 
+        sun.castShadow = true;
+        sun.shadow.mapSize.set(2048, 2048);
+        sun.shadow.radius = 4; 
+        sun.shadow.bias = -0.0001;
+        scene.add(sun);
+
+        // --- ASSETS ---
+        const paperTexture = createPaperTexture();
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 1.0 });
+        
+        const baseNoteMaterial = new THREE.MeshStandardMaterial({
+            map: paperTexture,
+            side: THREE.DoubleSide,
+            roughness: 0.9, 
+            metalness: 0.0, 
+            flatShading: true,
+            color: 0xffffff
+        });
+
+        const wall = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), wallMaterial);
+        wall.position.z = -0.05; 
+        wall.receiveShadow = true;
+        scene.add(wall);
+        interactableObjects.push(wall);
+
+        // --- NOTE LOGIC ---
+        function createNote(centerX, centerY, targetZ, rotationZ) {
+            const geo = new THREE.PlaneGeometry(CONFIG.width, CONFIG.height, CONFIG.segs, CONFIG.segs);
+            geo.translate(0, -CONFIG.height/2, 0); 
+            const nonIndexedGeo = geo.toNonIndexed();
+            
+            const randomColor = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+            const material = baseNoteMaterial.clone();
+            material.color.setHex(randomColor);
+            
+            material.polygonOffset = true;
+            material.polygonOffsetFactor = -1.0;
+            material.polygonOffsetUnits = -(notes.length + 1) * 150.0; 
+            material.depthWrite = true;
+            material.depthTest = true;
+
+            const mesh = new THREE.Mesh(nonIndexedGeo, material);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            scene.add(mesh);
+            interactableObjects.push(mesh);
+
+            const posAttr = nonIndexedGeo.attributes.position;
+            const vertexCount = posAttr.count;
+            
+            const noteParticles = [];
+            const glueParticles = []; 
+            const uniqueMap = {}; 
+            const vertexToParticle = [];
+
+            let pCount = 0;
+            const gridW = CONFIG.segs + 1;
+            const cos = Math.cos(rotationZ);
+            const sin = Math.sin(rotationZ);
+
+            // Prepare for Raycast to find "Bump" height
+            const potentialColliders = interactableObjects.filter(o => o !== mesh);
+            
+            // Calculate tilt factor for 20 degrees
+            const TILT_ANGLE = THREE.MathUtils.degToRad(20);
+            const TILT_SIN = Math.sin(TILT_ANGLE);
+
+            for(let i=0; i<vertexCount; i++) {
+                let lx = parseFloat(posAttr.getX(i).toFixed(4));
+                let ly = parseFloat(posAttr.getY(i).toFixed(4));
+                const key = `${lx},${ly}`;
+                
+                if (uniqueMap[key] === undefined) {
+                    const finalX = (lx * cos - ly * sin) + centerX;
+                    const finalY = (lx * sin + ly * cos) + centerY;
+                    
+                    const isPinned = ly > -(CONFIG.height * CONFIG.glueRatio);
+
+                    // Raycast Logic for Glue Strip
+                    let finalZ = targetZ;
+                    if (isPinned) {
+                        raycaster.set(new THREE.Vector3(finalX, finalY, 10), new THREE.Vector3(0, 0, -1));
+                        const hits = raycaster.intersectObjects(potentialColliders);
+                        if (hits.length > 0) {
+                            finalZ = Math.max(targetZ, hits[0].point.z + CONFIG.collisionThickness);
+                        }
+                    }
+
+                    const wx = finalX;
+                    const wy = finalY + CONFIG.spawnOffsetY;
+                    
+                    // NEW: Add tilt offset based on distance from top
+                    // ly ranges from 0 (top) to -height (bottom).
+                    // We want bottom to stick out further in Z.
+                    // --- CHANGED: Only apply tilt if NOT pinned to wall ---
+                    const tiltOffset = isPinned ? 0 : Math.abs(ly) * TILT_SIN;
+                    
+                    const wz = finalZ + CONFIG.spawnOffsetZ + tiltOffset;
+
+                    const p = {
+                        pos: new THREE.Vector3(wx, wy, wz),
+                        oldPos: new THREE.Vector3(wx, wy, wz),
+                        acc: new THREE.Vector3(),
+                        pinned: isPinned, 
+                        localY: Math.abs(ly) / CONFIG.height, 
+                        noteId: notes.length,
+                        targetX: finalX,
+                        targetY: finalY,
+                        targetZ: finalZ 
+                    };
+
+                    noteParticles.push(p);
+                    allParticles.push(p);
+                    if(isPinned) glueParticles.push(p);
+                    uniqueMap[key] = pCount;
+                    pCount++;
+                }
+                vertexToParticle[i] = uniqueMap[key];
+            }
+
+            // Constraints - NOW WITH STRUCTURAL BRACING
+            for(let y=0; y<gridW; y++) {
+                for(let x=0; x<gridW; x++) {
+                    const idx = y * gridW + x;
+                    const p = noteParticles[idx];
+                    if(!p) continue;
+
+                    const addC = (p1, p2, stiff, shrink=1.0) => {
+                        allConstraints.push({ p1, p2, dist: p1.pos.distanceTo(p2.pos) * shrink, stiffness: stiff });
+                    };
+
+                    // Structural (Neighbors)
+                    if(x < gridW-1) addC(p, noteParticles[idx+1], 1.0); 
+                    if(y < gridW-1) {
+                         let shrink = 1.0;
+                         if (x===0 || x===gridW-1) shrink = (y>1) ? 0.98 : 1.0; // Curl edge slightly
+                         addC(p, noteParticles[idx+gridW], 1.0, shrink); 
+                    }
+
+                    // Shear / Cross Bracing (Prevents Tangling)
+                    if (x < gridW - 1 && y < gridW - 1) {
+                         addC(p, noteParticles[idx + gridW + 1], 0.95); // Diagonal 1
+                         addC(noteParticles[idx + 1], noteParticles[idx + gridW], 0.95); // Diagonal 2
+                    }
+
+                    // Bending (Long distance)
+                    if(x < gridW-2) addC(p, noteParticles[idx+2], 0.85);
+                    if(y < gridW-2) addC(p, noteParticles[idx+gridW*2], 0.85);
+                }
+            }
+
+            notes.push({ 
+                mesh: mesh, 
+                particles: noteParticles, 
+                vertexMap: vertexToParticle,
+                isSpawning: true,
+                spawnTimer: 0,
+                spawnDuration: CONFIG.spawnDuration, 
+                glueParticles: glueParticles,
+                targetZ: targetZ,
+                centerX: centerX, 
+                centerY: centerY,
+                rotationZ: rotationZ
+            });
+        }
+
+        // --- DEBUG RENDERER ---
+        function updateDebugGrid() {
+            if (!DEBUG_MODE) return;
+            
+            // If particle count changed, rebuild geometry
+            if (!debugPointsMesh || debugPointsMesh.geometry.attributes.position.count !== allParticles.length) {
+                if (debugPointsMesh) {
+                    scene.remove(debugPointsMesh);
+                    debugPointsMesh.geometry.dispose();
+                }
+
+                const geometry = new THREE.BufferGeometry();
+                const pos = new Float32Array(allParticles.length * 3);
+                const col = new Float32Array(allParticles.length * 3);
+
+                // Initialize Colors once (Red for pinned, Green for free)
+                const cRed = new THREE.Color(0xff0000);
+                const cGreen = new THREE.Color(0x00ff00);
+                
+                for(let i=0; i<allParticles.length; i++) {
+                    const p = allParticles[i];
+                    const c = p.pinned ? cRed : cGreen;
+                    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+                }
+
+                geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+
+                const material = new THREE.PointsMaterial({ 
+                    size: 6, 
+                    vertexColors: true, 
+                    sizeAttenuation: false,
+                    depthTest: false,
+                    depthWrite: false
+                });
+
+                debugPointsMesh = new THREE.Points(geometry, material);
+                debugPointsMesh.renderOrder = 999; // Draw on top
+                scene.add(debugPointsMesh);
+            }
+
+            // Update positions every frame
+            const posAttr = debugPointsMesh.geometry.attributes.position;
+            const colAttr = debugPointsMesh.geometry.attributes.color;
+            const cRed = new THREE.Color(0xff0000);
+            const cGreen = new THREE.Color(0x00ff00);
+
+            for(let i=0; i<allParticles.length; i++) {
+                const p = allParticles[i];
+                posAttr.setXYZ(i, p.pos.x, p.pos.y, p.pos.z + 0.05); // Slight offset to see over paper
+                
+                // Refresh colors (in case pin status changes logic later, though static now)
+                const c = p.pinned ? cRed : cGreen;
+                colAttr.setXYZ(i, c.r, c.g, c.b);
+            }
+            posAttr.needsUpdate = true;
+            colAttr.needsUpdate = true;
+        }
+
+        // --- PHYSICS LOOP ---
+        const clock = new THREE.Clock();
+        
+        function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const totalDt = 0.016; 
+            
+            // Advance Wind Time
+            windTime += totalDt * WIND_SPEED;
+
+            const swell = Math.sin(windTime * 0.6) + Math.cos(windTime * 0.4); 
+            const turb = Math.sin(windTime * 2.5) * 0.5;
+            let rawIntensity = (swell + turb + 2.0) * 0.5; 
+            if (rawIntensity < 0.3) rawIntensity = 0.3;
+            const finalIntensity = rawIntensity * WIND_MULTIPLIER;
+            
+            // Calculate Global Wind Vector
+            const windX = WIND_DIR_X * 15;
+            const windY = WIND_DIR_Y * 10;
+            const windZ = 8 + Math.abs(WIND_DIR_X) * 4; 
+
+            const globalWind = new THREE.Vector3(
+                windX + (windX * finalIntensity), 
+                windY + (windY * finalIntensity), 
+                windZ + (finalIntensity * 12)
+            );
+
+            // 1. SPAWN ANIMATION
+            notes.forEach(note => {
+                if (note.isSpawning) {
+                    note.spawnTimer += totalDt;
+                    let progress = note.spawnTimer / note.spawnDuration;
+                    
+                    if (progress >= 1.0) {
+                        progress = 1.0;
+                        note.isSpawning = false;
+                    }
+
+                    const t = easeOutCubic(progress);
+                    const currentOffsetY = THREE.MathUtils.lerp(CONFIG.spawnOffsetY, 0, t);
+                    const currentOffsetZ = THREE.MathUtils.lerp(CONFIG.spawnOffsetZ, 0, t);
+
+                    note.glueParticles.forEach(p => {
+                        // Hard lock to target during spawn
+                        p.pos.y = p.targetY + currentOffsetY;
+                        p.pos.z = p.targetZ + currentOffsetZ;
+                        p.oldPos.copy(p.pos);
+                    });
+                }
+            });
+
+            // 2. SUB-STEPPED PHYSICS
+            const dt = totalDt / CONFIG.substeps;
+            
+            for (let s = 0; s < CONFIG.substeps; s++) {
+                
+                // Forces
+                for (let i = 0; i < allParticles.length; i++) {
+                    const p = allParticles[i];
+                    
+                    // --- CHANGED: Force Pinned Particles to Flush Z ---
+                    if (p.pinned) {
+                         p.pos.z = p.targetZ; // Strict flush
+                         continue; 
+                    }
+
+                    p.acc.add(GRAVITY);
+
+                    // --- NEW WIND LOGIC WITH SPATIAL NOISE ---
+                    const uniquePhase = (p.noteId * 13.5) + (p.pos.x * 2.5) + (p.pos.y * 3.5);
+                    const noiseX = Math.sin(windTime * FLUTTER_FREQ * 0.8 + uniquePhase) * 6.0;
+                    const noiseY = Math.cos(windTime * FLUTTER_FREQ * 0.6 + uniquePhase) * 4.0;
+                    const noiseZ = Math.sin(windTime * FLUTTER_FREQ + p.pos.z * 2.0) * 4.0;
+
+                    let fx = globalWind.x + noiseX;
+                    let fy = globalWind.y + noiseY;
+                    let fz = globalWind.z + noiseZ;
+
+                    const leverage = p.localY * p.localY;
+                    p.acc.x += fx * leverage;
+                    p.acc.y += fy * leverage;
+                    p.acc.z += fz * leverage;
+
+                    // Floor repulsion
+                    if (p.pos.z > 6.0) p.acc.z -= (p.pos.z - 6.0) * 20.0;
+
+                    const vel = p.pos.clone().sub(p.oldPos).multiplyScalar(FRICTION);
+                    if (vel.length() > CONFIG.maxSubstepVelocity) vel.setLength(CONFIG.maxSubstepVelocity);
+
+                    p.oldPos.copy(p.pos);
+                    p.pos.add(vel.add(p.acc.multiplyScalar(dt * dt)));
+                    p.acc.set(0, 0, 0);
+
+                    if (p.pos.z < 0) {
+                        p.pos.z = 0;
+                        p.oldPos.x = p.pos.x - (p.pos.x - p.oldPos.x) * 0.5; 
+                    }
+                }
+
+                // Enforce stack order
+                if (s % 4 === 0) enforceStackOrder(); 
+
+                // Constraints
+                for (let i = 0; i < allConstraints.length; i++) {
+                    const c = allConstraints[i];
+                    const diff = c.p2.pos.clone().sub(c.p1.pos);
+                    const dist = diff.length();
+                    if (dist === 0) continue;
+                    
+                    const stiff = c.stiffness * PAPER_STIFFNESS;
+                    const correction = (dist - c.dist) / dist * 0.8 * stiff;
+                    const offset = diff.multiplyScalar(correction);
+                    
+                    const m1 = c.p1.pinned ? 0 : 0.5;
+                    const m2 = c.p2.pinned ? 0 : 0.5;
+                    
+                    if (!c.p1.pinned) c.p1.pos.add(offset.clone().multiplyScalar(m1));
+                    if (!c.p2.pinned) c.p2.pos.sub(offset.clone().multiplyScalar(m2));
+                }
+
+                // --- COLLISIONS ---
+                if (s % 2 === 0) {
+                    spatialHash.clear();
+                    for(let i=0; i<allParticles.length; i++) spatialHash.insert(allParticles[i]);
+
+                    const neighbors = [];
+                    for (let i = 0; i < allParticles.length; i++) {
+                        const p1 = allParticles[i];
+                        neighbors.length = 0;
+                        spatialHash.query(p1, neighbors);
+
+                        for (let j = 0; j < neighbors.length; j++) {
+                            const p2 = neighbors[j];
+                            if (p1 === p2) continue;
+                            if (p1.noteId === p2.noteId) continue; 
+
+                            const dx = p2.pos.x - p1.pos.x;
+                            const dy = p2.pos.y - p1.pos.y;
+                            if (Math.abs(dx) > CONFIG.collisionRadius || Math.abs(dy) > CONFIG.collisionRadius) continue;
+
+                            const distSq = dx*dx + dy*dy;
+                            if (distSq < CONFIG.collisionRadius * CONFIG.collisionRadius) {
+                                
+                                let pOld, pNew;
+                                if (p1.noteId < p2.noteId) {
+                                    pOld = p1; pNew = p2;
+                                } else {
+                                    pOld = p2; pNew = p1;
+                                }
+
+                                const currentZDiff = pNew.pos.z - pOld.pos.z;
+                                
+                                if (currentZDiff < CONFIG.collisionThickness) {
+                                    const penetration = CONFIG.collisionThickness - currentZDiff;
+                                    
+                                    // IMPROVED PINNED COLLISION LOGIC
+                                    if (pOld.pinned && pNew.pinned) {
+                                        pNew.pos.z += penetration * 2.0; 
+                                    }
+                                    else if (pOld.pinned) {
+                                        pNew.pos.z += penetration * 1.2;
+                                    } 
+                                    else if (pNew.pinned) {
+                                        pOld.pos.z -= penetration * 1.2;
+                                    } 
+                                    else {
+                                        pNew.pos.z += penetration * 0.7;
+                                        pOld.pos.z -= penetration * 0.3;
+                                    }
+
+                                    // SAFETY CHECKS
+                                    if (pOld.pos.z < 0) pOld.pos.z = 0;
+                                    if (pNew.pos.z < 0) pNew.pos.z = 0;
+
+                                    if (pOld.pinned) pOld.pos.z = pOld.targetZ;
+                                    if (pNew.pinned) pNew.pos.z = pNew.targetZ;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Update Debug Grid Visuals if active
+            updateDebugGrid();
+
+            // 3. Render
+            notes.forEach(note => {
+                const positions = note.mesh.geometry.attributes.position;
+                for (let i = 0; i < positions.count; i++) {
+                    const pIdx = note.vertexMap[i];
+                    const p = note.particles[pIdx];
+                    positions.setXYZ(i, p.pos.x, p.pos.y, p.pos.z);
+                }
+                positions.needsUpdate = true;
+                note.mesh.geometry.computeVertexNormals();
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        function createPaperTexture() {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; 
+            ctx.fillRect(0, 0, size, size);
+            const glueH = size * CONFIG.glueRatio;
+            ctx.fillStyle = "rgba(0,0,0,0.05)"; ctx.fillRect(0, 0, size, glueH);
+            ctx.fillStyle = "rgba(0,0,0,0.06)"; 
+            for(let i=0; i<8000; i++) ctx.fillRect(Math.random() * size, Math.random() * size, 1.5, 1.5);
+            ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+            for(let i=0; i<3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(size*0.2, size*(0.4 + i*0.2));
+                ctx.lineTo(size*0.8, size*(0.4 + i*0.2));
+                ctx.stroke();
+            }
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            return tex;
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize with one note
+        createNote(0, 0, 0.005, 0);
+
+        animate();
+    </script>
+</body>
+</html>

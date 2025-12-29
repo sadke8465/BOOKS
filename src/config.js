@@ -59,6 +59,9 @@ export const CONFIG = {
     noiseYFreq: 0.6,
     noiseZFreq: 1.0,
     noiseZPosScale: 2.0,
+    occlusionRadiusScale: 1.2,
+    occlusionStrength: 0.85,
+    occlusionFalloff: 2.5,
   },
   physics: {
     fixedDt: 0.016,
@@ -88,6 +91,11 @@ export const CONFIG = {
     tiltAngleDeg: 20,
     raycastHeight: 10,
     randomRotationDeg: 5,
+    restCurlZ: 0.32,
+    restCurlY: 0.12,
+    restCurlX: 0.08,
+    restCurlExponent: 1.4,
+    restStrength: 12.0,
   },
   debug: {
     pointSize: 6,

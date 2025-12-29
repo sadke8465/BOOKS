@@ -41,6 +41,8 @@ export class PhysicsSolver {
       windZ + finalIntensity * CONFIG.wind.zIntensityBoost
     );
 
+    this.computeWindOcclusion();
+
     state.notes.forEach((note) => {
       if (note.isSpawning) {
         note.spawnTimer += totalDt;
@@ -85,6 +87,15 @@ export class PhysicsSolver {
 
         p.acc.add(state.gravity);
 
+        if (p.restPos) {
+          const restForce = p.restPos.clone().sub(p.pos);
+          restForce.multiplyScalar(CONFIG.note.restStrength);
+          p.acc.add(restForce);
+        }
+
+        const windShield = p.windShield ?? 0;
+        const windScale = 1 - windShield * CONFIG.wind.occlusionStrength;
+
         const uniquePhase =
           p.noteId * CONFIG.wind.phaseNote +
           p.pos.x * CONFIG.wind.phaseX +
@@ -107,9 +118,9 @@ export class PhysicsSolver {
           CONFIG.wind.noiseZ;
 
         const leverage = p.localY * p.localY;
-        p.acc.x += (globalWind.x + noiseX) * leverage;
-        p.acc.y += (globalWind.y + noiseY) * leverage;
-        p.acc.z += (globalWind.z + noiseZ) * leverage;
+        p.acc.x += (globalWind.x + noiseX) * leverage * windScale;
+        p.acc.y += (globalWind.y + noiseY) * leverage * windScale;
+        p.acc.z += (globalWind.z + noiseZ) * leverage * windScale;
 
         if (p.pos.z > CONFIG.physics.floorZ) {
           p.acc.z -= (p.pos.z - CONFIG.physics.floorZ) * CONFIG.physics.floorRepulsion;
@@ -165,6 +176,50 @@ export class PhysicsSolver {
     }
 
     this.updateDebugGrid();
+  }
+
+  computeWindOcclusion() {
+    const { state, spatialHash } = this;
+    const effectiveRadius = CONFIG.collisionRadius * CONFIG.wind.occlusionRadiusScale;
+    const falloff = state.collisionThickness * CONFIG.wind.occlusionFalloff;
+
+    spatialHash.clear();
+    for (let i = 0; i < state.allParticles.length; i += 1) {
+      spatialHash.insert(state.allParticles[i]);
+    }
+
+    const neighbors = [];
+
+    for (let i = 0; i < state.allParticles.length; i += 1) {
+      const p = state.allParticles[i];
+      p.windShield = 0;
+      neighbors.length = 0;
+      spatialHash.query(p, neighbors);
+
+      for (let j = 0; j < neighbors.length; j += 1) {
+        const other = neighbors[j];
+        if (other === p) continue;
+        if (other.noteId === p.noteId) continue;
+        if (other.noteId < p.noteId) continue;
+
+        const dx = other.pos.x - p.pos.x;
+        const dy = other.pos.y - p.pos.y;
+        if (Math.abs(dx) > effectiveRadius || Math.abs(dy) > effectiveRadius) {
+          continue;
+        }
+
+        const distSq = dx * dx + dy * dy;
+        if (distSq > effectiveRadius * effectiveRadius) continue;
+
+        const zGap = other.pos.z - p.pos.z;
+        if (zGap <= 0) continue;
+
+        const localShield = falloff <= 0 ? 1 : Math.max(0, 1 - zGap / falloff);
+        if (localShield > p.windShield) {
+          p.windShield = localShield;
+        }
+      }
+    }
   }
 
   applyRestDamping(state) {

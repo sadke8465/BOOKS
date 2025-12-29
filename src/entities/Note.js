@@ -64,6 +64,8 @@ export class Note {
 
     const tiltAngle = THREE.MathUtils.degToRad(CONFIG.note.tiltAngleDeg);
     const tiltSin = Math.sin(tiltAngle);
+    const restExponent = CONFIG.note.restCurlExponent;
+    const halfWidth = CONFIG.width / 2;
 
     for (let i = 0; i < vertexCount; i += 1) {
       const lx = parseFloat(posAttr.getX(i).toFixed(4));
@@ -75,6 +77,9 @@ export class Note {
         const finalY = lx * sin + ly * cos + centerY;
 
         const isPinned = ly > -(CONFIG.height * CONFIG.glueRatio);
+        const localXNorm = halfWidth === 0 ? 0 : lx / halfWidth;
+        const localY = Math.abs(ly) / CONFIG.height;
+        const curlAmount = Math.pow(localY, restExponent);
 
         let finalZ = targetZ;
         if (isPinned) {
@@ -88,10 +93,19 @@ export class Note {
           }
         }
 
-        const wx = finalX;
-        const wy = finalY + CONFIG.spawnOffsetY;
+        const curlX = CONFIG.note.restCurlX * curlAmount * localXNorm;
+        const curlY = CONFIG.note.restCurlY * curlAmount;
+        const curlZ = CONFIG.note.restCurlZ * curlAmount;
+        const restOffsetX = isPinned ? 0 : curlX * cos - curlY * sin;
+        const restOffsetY = isPinned ? 0 : curlX * sin + curlY * cos;
         const tiltOffset = isPinned ? 0 : Math.abs(ly) * tiltSin;
-        const wz = finalZ + CONFIG.spawnOffsetZ + tiltOffset;
+        const restX = finalX + restOffsetX;
+        const restY = finalY + restOffsetY;
+        const restZ = finalZ + curlZ + tiltOffset;
+
+        const wx = restX;
+        const wy = restY + CONFIG.spawnOffsetY;
+        const wz = restZ + CONFIG.spawnOffsetZ;
 
         const p = {
           pos: new THREE.Vector3(wx, wy, wz),
@@ -100,11 +114,16 @@ export class Note {
           acc: new THREE.Vector3(),
           pinned: isPinned,
           isSpawning: true,
-          localY: Math.abs(ly) / CONFIG.height,
+          localY,
           noteId,
           targetX: finalX,
           targetY: finalY,
           targetZ: finalZ,
+          restPos: new THREE.Vector3(
+            isPinned ? finalX : restX,
+            isPinned ? finalY : restY,
+            isPinned ? finalZ : restZ
+          ),
         };
 
         this.particles.push(p);

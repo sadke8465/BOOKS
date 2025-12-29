@@ -23,16 +23,24 @@ const uiManager = new UIManager({
     WorldState.notes = [];
     WorldState.allParticles = [];
     WorldState.allConstraints = [];
+    WorldState.allEdges = [];
     WorldState.interactableObjects = [wall];
+    WorldState.nextParticleId = 0;
+    WorldState.nextEdgeId = 0;
+    WorldState.paused = false;
+    WorldState.stepOnce = false;
+    WorldState.violationDetected = false;
     spatialHash.clear();
     solver.clearDebugPoints();
     uiManager.setNotesCount(0);
   },
-  onDebugToggle: (enabled) => {
-    if (!enabled) {
+  onDebugToggle: () => {
+    if (!WorldState.debugMode && !WorldState.debugHeatmap && !WorldState.debugShowRadius) {
       solver.clearDebugPoints();
     }
   },
+  onPauseToggle: () => {},
+  onStep: () => {},
 });
 
 function spawnNote({ x, y, z, angle }) {

@@ -108,6 +108,7 @@ export class Note {
         const wz = restZ + CONFIG.spawnOffsetZ;
 
         const p = {
+          id: state.nextParticleId,
           pos: new THREE.Vector3(wx, wy, wz),
           oldPos: new THREE.Vector3(wx, wy, wz),
           renderPos: new THREE.Vector3(wx, wy, wz),
@@ -116,6 +117,10 @@ export class Note {
           isSpawning: true,
           localY,
           noteId,
+          depthIndex: noteId,
+          radius: CONFIG.collisionRadius,
+          penetration: 0,
+          neighbors: new Set(),
           targetX: finalX,
           targetY: finalY,
           targetZ: finalZ,
@@ -129,6 +134,7 @@ export class Note {
         this.particles.push(p);
         state.allParticles.push(p);
         if (isPinned) this.glueParticles.push(p);
+        state.nextParticleId += 1;
         uniqueMap[key] = pCount;
         pCount += 1;
       }
@@ -142,6 +148,10 @@ export class Note {
         if (!p) continue;
 
         const addConstraint = (p1, p2, stiff, shrink = 1.0) => {
+          if (p1 && p2) {
+            p1.neighbors.add(p2);
+            p2.neighbors.add(p1);
+          }
           state.allConstraints.push({
             p1,
             p2,
@@ -150,18 +160,37 @@ export class Note {
           });
         };
 
-        if (x < gridW - 1) addConstraint(p, this.particles[idx + 1], 1.0);
+        const addEdge = (p1, p2) => {
+          if (!p1 || !p2) return;
+          state.allEdges.push({
+            id: state.nextEdgeId,
+            p1,
+            p2,
+            noteId,
+            radius: CONFIG.collisionRadius * CONFIG.collisions.edgeRadiusScale,
+            lastQueryId: -1,
+          });
+          state.nextEdgeId += 1;
+        };
+
+        if (x < gridW - 1) {
+          addConstraint(p, this.particles[idx + 1], 1.0);
+          addEdge(p, this.particles[idx + 1]);
+        }
         if (y < gridW - 1) {
           let shrink = 1.0;
           if (x === 0 || x === gridW - 1) {
             shrink = y > 1 ? 0.98 : 1.0;
           }
           addConstraint(p, this.particles[idx + gridW], 1.0, shrink);
+          addEdge(p, this.particles[idx + gridW]);
         }
 
         if (x < gridW - 1 && y < gridW - 1) {
           addConstraint(p, this.particles[idx + gridW + 1], 0.95);
           addConstraint(this.particles[idx + 1], this.particles[idx + gridW], 0.95);
+          addEdge(p, this.particles[idx + gridW + 1]);
+          addEdge(this.particles[idx + 1], this.particles[idx + gridW]);
         }
 
         if (x < gridW - 2) addConstraint(p, this.particles[idx + 2], 0.85);

@@ -1,7 +1,12 @@
 // Physics solver responsible for stepping Verlet integration and constraints.
 import * as THREE from "three";
 import { CONFIG } from "../config.js";
-import { enforceStackOrder, resolveCollisions } from "./Collision.js";
+import {
+  resetPenetrations,
+  resolveFinalCollisions,
+  resolveInterMeshCollisions,
+  resolveSelfCollisions,
+} from "./Collision.js";
 
 export class PhysicsSolver {
   constructor(state, spatialHash, scene) {
@@ -17,6 +22,11 @@ export class PhysicsSolver {
   step() {
     const totalDt = CONFIG.physics.fixedDt;
     const { state } = this;
+    if (state.paused && !state.stepOnce) return;
+    if (state.stepOnce) {
+      state.stepOnce = false;
+    }
+    state.violationDetected = false;
 
     state.windTime += totalDt * state.windSpeed;
 
@@ -70,80 +80,44 @@ export class PhysicsSolver {
       }
     });
 
-    const dt = totalDt / CONFIG.substeps;
+    const maxVelocity = this.getMaxVelocity();
+    const adaptiveSubsteps = Math.ceil(
+      maxVelocity / CONFIG.physics.substepVelocityThreshold
+    );
+    const substeps = Math.min(
+      CONFIG.physics.maxSubsteps,
+      Math.max(CONFIG.substeps, adaptiveSubsteps)
+    );
+    const collisionPasses =
+      maxVelocity > CONFIG.physics.substepVelocityThreshold
+        ? CONFIG.physics.fastCollisionIterations
+        : CONFIG.physics.collisionIterations;
+    const dt = totalDt / substeps;
 
-    for (let s = 0; s < CONFIG.substeps; s += 1) {
+    resetPenetrations(state.allParticles);
+
+    for (let s = 0; s < substeps; s += 1) {
       for (let i = 0; i < state.allParticles.length; i += 1) {
-        const p = state.allParticles[i];
-
-        if (p.pinned) {
-          if (!p.isSpawning) {
-            p.pos.set(p.targetX, p.targetY, p.targetZ);
-          }
-          p.oldPos.copy(p.pos);
-          p.acc.set(0, 0, 0);
-          continue;
-        }
-
-        p.acc.add(state.gravity);
-
-        if (p.restPos) {
-          const restForce = p.restPos.clone().sub(p.pos);
-          restForce.multiplyScalar(CONFIG.note.restStrength);
-          p.acc.add(restForce);
-        }
-
-        const windShield = p.windShield ?? 0;
-        const windScale = 1 - windShield * CONFIG.wind.occlusionStrength;
-
-        const uniquePhase =
-          p.noteId * CONFIG.wind.phaseNote +
-          p.pos.x * CONFIG.wind.phaseX +
-          p.pos.y * CONFIG.wind.phaseY;
-        const noiseX =
-          Math.sin(
-            state.windTime * state.flutterFreq * CONFIG.wind.noiseXFreq + uniquePhase
-          ) *
-          CONFIG.wind.noiseX;
-        const noiseY =
-          Math.cos(
-            state.windTime * state.flutterFreq * CONFIG.wind.noiseYFreq + uniquePhase
-          ) *
-          CONFIG.wind.noiseY;
-        const noiseZ =
-          Math.sin(
-            state.windTime * state.flutterFreq * CONFIG.wind.noiseZFreq +
-              p.pos.z * CONFIG.wind.noiseZPosScale
-          ) *
-          CONFIG.wind.noiseZ;
-
-        const leverage = p.localY * p.localY;
-        p.acc.x += (globalWind.x + noiseX) * leverage * windScale;
-        p.acc.y += (globalWind.y + noiseY) * leverage * windScale;
-        p.acc.z += (globalWind.z + noiseZ) * leverage * windScale;
-
-        if (p.pos.z > CONFIG.physics.floorZ) {
-          p.acc.z -= (p.pos.z - CONFIG.physics.floorZ) * CONFIG.physics.floorRepulsion;
-        }
-
-        const vel = p.pos.clone().sub(p.oldPos).multiplyScalar(state.friction);
-        if (vel.length() > CONFIG.maxSubstepVelocity) {
-          vel.setLength(CONFIG.maxSubstepVelocity);
-        }
-
-        p.oldPos.copy(p.pos);
-        p.pos.add(vel.add(p.acc.multiplyScalar(dt * dt)));
-        p.acc.set(0, 0, 0);
-
-        if (p.pos.z < 0) {
-          p.pos.z = 0;
-          p.oldPos.z =
-            p.pos.z - (p.pos.z - p.oldPos.z) * CONFIG.physics.boundaryDampen;
-        }
+        this.applyExternalForces(state.allParticles[i], globalWind);
       }
 
-      if (s % CONFIG.physics.stackInterval === 0) {
-        enforceStackOrder(state.allParticles, this.spatialHash, state.collisionThickness);
+      for (let i = 0; i < state.allParticles.length; i += 1) {
+        this.integrateParticle(state.allParticles[i], dt);
+      }
+
+      for (let iter = 0; iter < collisionPasses; iter += 1) {
+        resolveSelfCollisions(
+          state.allParticles,
+          state.allEdges,
+          this.spatialHash,
+          state.collisionThickness
+        );
+        resolveInterMeshCollisions(
+          state.allParticles,
+          state.allEdges,
+          this.spatialHash,
+          state.collisionThickness
+        );
       }
 
       for (let iter = 0; iter < CONFIG.physics.constraintIterations; iter += 1) {
@@ -166,16 +140,108 @@ export class PhysicsSolver {
         }
       }
 
-      if (s % CONFIG.physics.collisionInterval === 0) {
-        for (let iter = 0; iter < CONFIG.physics.collisionIterations; iter += 1) {
-          resolveCollisions(state.allParticles, this.spatialHash, state.collisionThickness);
+      const finalResult = resolveFinalCollisions(
+        state.allParticles,
+        state.allEdges,
+        this.spatialHash,
+        state.collisionThickness
+      );
+      if (finalResult.maxPenetration > 0) {
+        finalResult.hitParticles.forEach((p) => {
+          p.oldPos.copy(p.pos);
+        });
+        state.violationDetected = true;
+        if (state.freezeOnViolation) {
+          state.paused = true;
         }
       }
 
-      this.applyRestDamping(state);
+      this.applyCollisionDamping(finalResult.hitParticles);
+      this.applyVelocityDamping(state);
     }
 
     this.updateDebugGrid();
+  }
+
+  getMaxVelocity() {
+    let maxVel = 0;
+    for (let i = 0; i < this.state.allParticles.length; i += 1) {
+      const p = this.state.allParticles[i];
+      const vel = p.pos.clone().sub(p.oldPos);
+      maxVel = Math.max(maxVel, vel.length());
+    }
+    return maxVel;
+  }
+
+  applyExternalForces(p, globalWind) {
+    if (p.pinned) {
+      if (!p.isSpawning) {
+        p.pos.set(p.targetX, p.targetY, p.targetZ);
+      }
+      p.oldPos.copy(p.pos);
+      p.acc.set(0, 0, 0);
+      return;
+    }
+
+    p.acc.add(this.state.gravity);
+
+    if (p.restPos) {
+      const restForce = p.restPos.clone().sub(p.pos);
+      restForce.multiplyScalar(CONFIG.note.restStrength);
+      p.acc.add(restForce);
+    }
+
+    const windShield = p.windShield ?? 0;
+    const windScale = 1 - windShield * CONFIG.wind.occlusionStrength;
+
+    const uniquePhase =
+      p.noteId * CONFIG.wind.phaseNote +
+      p.pos.x * CONFIG.wind.phaseX +
+      p.pos.y * CONFIG.wind.phaseY;
+    const noiseX =
+      Math.sin(this.state.windTime * this.state.flutterFreq * CONFIG.wind.noiseXFreq +
+        uniquePhase) * CONFIG.wind.noiseX;
+    const noiseY =
+      Math.cos(this.state.windTime * this.state.flutterFreq * CONFIG.wind.noiseYFreq +
+        uniquePhase) * CONFIG.wind.noiseY;
+    const noiseZ =
+      Math.sin(
+        this.state.windTime * this.state.flutterFreq * CONFIG.wind.noiseZFreq +
+          p.pos.z * CONFIG.wind.noiseZPosScale
+      ) * CONFIG.wind.noiseZ;
+
+    const leverage = p.localY * p.localY;
+    p.acc.x += (globalWind.x + noiseX) * leverage * windScale;
+    p.acc.y += (globalWind.y + noiseY) * leverage * windScale;
+    p.acc.z += (globalWind.z + noiseZ) * leverage * windScale;
+
+    if (p.pos.z > CONFIG.physics.floorZ) {
+      p.acc.z -= (p.pos.z - CONFIG.physics.floorZ) * CONFIG.physics.floorRepulsion;
+    }
+  }
+
+  integrateParticle(p, dt) {
+    if (p.pinned) {
+      return;
+    }
+
+    const vel = p.pos.clone().sub(p.oldPos).multiplyScalar(this.state.friction);
+    if (vel.length() > CONFIG.maxSubstepVelocity) {
+      vel.setLength(CONFIG.maxSubstepVelocity);
+    }
+    if (vel.length() > CONFIG.physics.maxDisplacement) {
+      vel.setLength(CONFIG.physics.maxDisplacement);
+    }
+
+    p.oldPos.copy(p.pos);
+    p.pos.add(vel.add(p.acc.multiplyScalar(dt * dt)));
+    p.acc.set(0, 0, 0);
+
+    if (p.pos.z < 0) {
+      p.pos.z = 0;
+      p.oldPos.z =
+        p.pos.z - (p.pos.z - p.oldPos.z) * CONFIG.physics.boundaryDampen;
+    }
   }
 
   computeWindOcclusion() {
@@ -185,7 +251,7 @@ export class PhysicsSolver {
 
     spatialHash.clear();
     for (let i = 0; i < state.allParticles.length; i += 1) {
-      spatialHash.insert(state.allParticles[i]);
+      spatialHash.insertParticle(state.allParticles[i]);
     }
 
     const neighbors = [];
@@ -194,7 +260,7 @@ export class PhysicsSolver {
       const p = state.allParticles[i];
       p.windShield = 0;
       neighbors.length = 0;
-      spatialHash.query(p, neighbors);
+      spatialHash.queryParticlesAt(p.pos.x, p.pos.y, neighbors);
 
       for (let j = 0; j < neighbors.length; j += 1) {
         const other = neighbors[j];
@@ -222,7 +288,17 @@ export class PhysicsSolver {
     }
   }
 
-  applyRestDamping(state) {
+  applyCollisionDamping(hitParticles) {
+    if (!hitParticles || hitParticles.size === 0) return;
+    hitParticles.forEach((p) => {
+      if (p.pinned) return;
+      const vel = p.pos.clone().sub(p.oldPos);
+      vel.multiplyScalar(1 - CONFIG.collisions.microDamping);
+      p.oldPos.copy(p.pos.clone().sub(vel));
+    });
+  }
+
+  applyVelocityDamping(state) {
     const sleepVelSq = CONFIG.physics.sleepVelocity * CONFIG.physics.sleepVelocity;
     for (let i = 0; i < state.allParticles.length; i += 1) {
       const p = state.allParticles[i];
@@ -243,62 +319,126 @@ export class PhysicsSolver {
 
   updateDebugGrid() {
     const { state } = this;
-    if (!state.debugMode) return;
+    if (!state.debugMode && !state.debugHeatmap && !state.debugShowRadius) {
+      return;
+    }
 
-    if (
-      !state.debugPointsMesh ||
-      state.debugPointsMesh.geometry.attributes.position.count !== state.allParticles.length
-    ) {
-      if (state.debugPointsMesh) {
-        this.scene.remove(state.debugPointsMesh);
-        state.debugPointsMesh.geometry.dispose();
+    const showPoints = state.debugMode || state.debugHeatmap;
+
+    if (showPoints) {
+      if (
+        !state.debugPointsMesh ||
+        state.debugPointsMesh.geometry.attributes.position.count !== state.allParticles.length
+      ) {
+        if (state.debugPointsMesh) {
+          this.scene.remove(state.debugPointsMesh);
+          state.debugPointsMesh.geometry.dispose();
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        const pos = new Float32Array(state.allParticles.length * 3);
+        const col = new Float32Array(state.allParticles.length * 3);
+
+        const cRed = new THREE.Color(0xff0000);
+        const cGreen = new THREE.Color(0x00ff00);
+
+        for (let i = 0; i < state.allParticles.length; i += 1) {
+          const p = state.allParticles[i];
+          const c = p.pinned ? cRed : cGreen;
+          col[i * 3] = c.r;
+          col[i * 3 + 1] = c.g;
+          col[i * 3 + 2] = c.b;
+        }
+
+        geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
+
+        const material = new THREE.PointsMaterial({
+          size: CONFIG.debug.pointSize,
+          vertexColors: true,
+          sizeAttenuation: false,
+          depthTest: false,
+          depthWrite: false,
+        });
+
+        state.debugPointsMesh = new THREE.Points(geometry, material);
+        state.debugPointsMesh.renderOrder = 999;
+        this.scene.add(state.debugPointsMesh);
       }
 
-      const geometry = new THREE.BufferGeometry();
-      const pos = new Float32Array(state.allParticles.length * 3);
-      const col = new Float32Array(state.allParticles.length * 3);
-
+      const posAttr = state.debugPointsMesh.geometry.attributes.position;
+      const colAttr = state.debugPointsMesh.geometry.attributes.color;
       const cRed = new THREE.Color(0xff0000);
       const cGreen = new THREE.Color(0x00ff00);
+      const cHot = new THREE.Color(0xff3b30);
+      const cCool = new THREE.Color(0x4fc3f7);
+      const maxPen = Math.max(
+        0.001,
+        ...state.allParticles.map((p) => p.penetration || 0)
+      );
 
       for (let i = 0; i < state.allParticles.length; i += 1) {
         const p = state.allParticles[i];
-        const c = p.pinned ? cRed : cGreen;
-        col[i * 3] = c.r;
-        col[i * 3 + 1] = c.g;
-        col[i * 3 + 2] = c.b;
+        posAttr.setXYZ(i, p.pos.x, p.pos.y, p.pos.z + CONFIG.debug.zOffset);
+
+        if (state.debugHeatmap) {
+          const t = Math.min(1, (p.penetration || 0) / maxPen);
+          const color = cCool.clone().lerp(cHot, t);
+          colAttr.setXYZ(i, color.r, color.g, color.b);
+        } else {
+          const c = p.pinned ? cRed : cGreen;
+          colAttr.setXYZ(i, c.r, c.g, c.b);
+        }
+      }
+      posAttr.needsUpdate = true;
+      colAttr.needsUpdate = true;
+    } else if (state.debugPointsMesh) {
+      this.scene.remove(state.debugPointsMesh);
+      state.debugPointsMesh.geometry.dispose();
+      state.debugPointsMesh = null;
+    }
+
+    if (state.debugShowRadius) {
+      if (
+        !state.debugRadiusMesh ||
+        state.debugRadiusMesh.count !== state.allParticles.length
+      ) {
+        if (state.debugRadiusMesh) {
+          this.scene.remove(state.debugRadiusMesh);
+          state.debugRadiusMesh.geometry.dispose();
+          state.debugRadiusMesh.material.dispose();
+        }
+
+        const geom = new THREE.SphereGeometry(CONFIG.collisionRadius, 10, 10);
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0x2196f3,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.3,
+          depthTest: false,
+        });
+        state.debugRadiusMesh = new THREE.InstancedMesh(
+          geom,
+          mat,
+          state.allParticles.length
+        );
+        state.debugRadiusMesh.renderOrder = 998;
+        this.scene.add(state.debugRadiusMesh);
       }
 
-      geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-      geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
-
-      const material = new THREE.PointsMaterial({
-        size: CONFIG.debug.pointSize,
-        vertexColors: true,
-        sizeAttenuation: false,
-        depthTest: false,
-        depthWrite: false,
-      });
-
-      state.debugPointsMesh = new THREE.Points(geometry, material);
-      state.debugPointsMesh.renderOrder = 999;
-      this.scene.add(state.debugPointsMesh);
+      const matrix = new THREE.Matrix4();
+      for (let i = 0; i < state.allParticles.length; i += 1) {
+        const p = state.allParticles[i];
+        matrix.makeTranslation(p.pos.x, p.pos.y, p.pos.z);
+        state.debugRadiusMesh.setMatrixAt(i, matrix);
+      }
+      state.debugRadiusMesh.instanceMatrix.needsUpdate = true;
+    } else if (state.debugRadiusMesh) {
+      this.scene.remove(state.debugRadiusMesh);
+      state.debugRadiusMesh.geometry.dispose();
+      state.debugRadiusMesh.material.dispose();
+      state.debugRadiusMesh = null;
     }
-
-    const posAttr = state.debugPointsMesh.geometry.attributes.position;
-    const colAttr = state.debugPointsMesh.geometry.attributes.color;
-    const cRed = new THREE.Color(0xff0000);
-    const cGreen = new THREE.Color(0x00ff00);
-
-    for (let i = 0; i < state.allParticles.length; i += 1) {
-      const p = state.allParticles[i];
-      posAttr.setXYZ(i, p.pos.x, p.pos.y, p.pos.z + CONFIG.debug.zOffset);
-
-      const c = p.pinned ? cRed : cGreen;
-      colAttr.setXYZ(i, c.r, c.g, c.b);
-    }
-    posAttr.needsUpdate = true;
-    colAttr.needsUpdate = true;
   }
 
   clearDebugPoints() {
@@ -307,6 +447,12 @@ export class PhysicsSolver {
       this.scene.remove(state.debugPointsMesh);
       state.debugPointsMesh.geometry.dispose();
       state.debugPointsMesh = null;
+    }
+    if (state.debugRadiusMesh) {
+      this.scene.remove(state.debugRadiusMesh);
+      state.debugRadiusMesh.geometry.dispose();
+      state.debugRadiusMesh.material.dispose();
+      state.debugRadiusMesh = null;
     }
   }
 }

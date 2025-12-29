@@ -1,5 +1,7 @@
-// Collision helpers for sticky note stacking and overlap checks.
+// Collision helpers for particle/edge collisions and stacking discipline.
 import { CONFIG } from "../config.js";
+
+const EPS = 1e-6;
 
 export function checkGlueOverlap(x, y, notes) {
   const glueH = CONFIG.height * CONFIG.glueRatio;
@@ -26,127 +28,314 @@ export function checkGlueOverlap(x, y, notes) {
   return false;
 }
 
-export function enforceStackOrder(allParticles, spatialHash, collisionThickness) {
-  const effectiveRadius = CONFIG.collisionRadius + CONFIG.collisions.radiusPadding;
-  const effectiveThickness = collisionThickness + CONFIG.collisions.thicknessPadding;
-  spatialHash.clear();
-  for (let i = 0; i < allParticles.length; i += 1) {
-    spatialHash.insert(allParticles[i]);
-  }
+function clamp01(v) {
+  return Math.max(0, Math.min(1, v));
+}
 
-  const neighbors = [];
-
-  for (let i = 0; i < allParticles.length; i += 1) {
-    const p1 = allParticles[i];
-    neighbors.length = 0;
-    spatialHash.query(p1, neighbors);
-
-    for (let j = 0; j < neighbors.length; j += 1) {
-      const p2 = neighbors[j];
-      if (p1 === p2) continue;
-      if (p1.noteId === p2.noteId) continue;
-
-      const dx = p2.pos.x - p1.pos.x;
-      const dy = p2.pos.y - p1.pos.y;
-
-      if (Math.abs(dx) > effectiveRadius || Math.abs(dy) > effectiveRadius) {
-        continue;
-      }
-
-      const distSq = dx * dx + dy * dy;
-      if (distSq < effectiveRadius * effectiveRadius) {
-        let pBottom;
-        let pTop;
-        if (p1.noteId < p2.noteId) {
-          pBottom = p1;
-          pTop = p2;
-        } else {
-          pBottom = p2;
-          pTop = p1;
-        }
-
-        const currentZGap = pTop.pos.z - pBottom.pos.z;
-        const minGap = effectiveThickness;
-
-        if (currentZGap < minGap) {
-          const penetration = minGap - currentZGap;
-
-          if (pBottom.pinned) {
-            pTop.pos.z += penetration;
-          } else if (pTop.pinned) {
-            pBottom.pos.z -= penetration;
-          } else {
-            pBottom.pos.z -= penetration * CONFIG.collisions.stackBottomScale;
-            pTop.pos.z += penetration * CONFIG.collisions.stackTopScale;
-          }
-
-          if (pBottom.pos.z < 0) pBottom.pos.z = 0;
-        }
-      }
-    }
+function updatePenetration(p, amount) {
+  if (amount > p.penetration) {
+    p.penetration = amount;
   }
 }
 
-export function resolveCollisions(allParticles, spatialHash, collisionThickness) {
-  const effectiveRadius = CONFIG.collisionRadius + CONFIG.collisions.radiusPadding;
-  const effectiveThickness = collisionThickness + CONFIG.collisions.thicknessPadding;
-  spatialHash.clear();
-  for (let i = 0; i < allParticles.length; i += 1) {
-    spatialHash.insert(allParticles[i]);
-  }
+function resolveParticleParticle(p1, p2, options, hitParticles) {
+  const dx = p2.pos.x - p1.pos.x;
+  const dy = p2.pos.y - p1.pos.y;
+  const dz = p2.pos.z - p1.pos.z;
+  const minDist = p1.radius + p2.radius + options.slop;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq >= minDist * minDist) return 0;
 
-  const neighbors = [];
-  for (let i = 0; i < allParticles.length; i += 1) {
-    const p1 = allParticles[i];
-    neighbors.length = 0;
-    spatialHash.query(p1, neighbors);
+  const dist = Math.sqrt(distSq) || EPS;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const nz = dz / dist;
+  const penetration = minDist - dist;
 
-    for (let j = 0; j < neighbors.length; j += 1) {
-      const p2 = neighbors[j];
-      if (p1 === p2) continue;
-      if (p1.noteId === p2.noteId) continue;
+  let w1 = p1.pinned ? 0 : 1;
+  let w2 = p2.pinned ? 0 : 1;
 
-      const dx = p2.pos.x - p1.pos.x;
-      const dy = p2.pos.y - p1.pos.y;
-      if (Math.abs(dx) > effectiveRadius || Math.abs(dy) > effectiveRadius) {
-        continue;
-      }
-
-      const distSq = dx * dx + dy * dy;
-      if (distSq < effectiveRadius * effectiveRadius) {
-        let pOld;
-        let pNew;
-        if (p1.noteId < p2.noteId) {
-          pOld = p1;
-          pNew = p2;
-        } else {
-          pOld = p2;
-          pNew = p1;
-        }
-
-        const currentZDiff = pNew.pos.z - pOld.pos.z;
-
-        if (currentZDiff < effectiveThickness) {
-          const penetration = effectiveThickness - currentZDiff;
-
-          if (pOld.pinned && pNew.pinned) {
-            pNew.pos.z += penetration * CONFIG.collisions.pinnedPinnedBoost;
-          } else if (pOld.pinned) {
-            pNew.pos.z += penetration * CONFIG.collisions.pinnedPush;
-          } else if (pNew.pinned) {
-            pOld.pos.z -= penetration * CONFIG.collisions.pinnedPush;
-          } else {
-            pNew.pos.z += penetration * CONFIG.collisions.freeNewScale;
-            pOld.pos.z -= penetration * CONFIG.collisions.freeOldScale;
-          }
-
-          if (pOld.pos.z < 0) pOld.pos.z = 0;
-          if (pNew.pos.z < 0) pNew.pos.z = 0;
-
-          if (pOld.pinned) pOld.pos.z = pOld.targetZ;
-          if (pNew.pinned) pNew.pos.z = pNew.targetZ;
-        }
+  if (options.layerBias && p1.noteId !== p2.noteId) {
+    const lower = p1.depthIndex < p2.depthIndex ? p1 : p2;
+    const upper = lower === p1 ? p2 : p1;
+    if (lower === p1) {
+      w1 *= options.lowerLayerWeight;
+      w2 *= options.upperLayerWeight;
+    } else {
+      w1 *= options.upperLayerWeight;
+      w2 *= options.lowerLayerWeight;
+    }
+    if (upper.pos.z < lower.pos.z + options.thickness) {
+      const lift = lower.pos.z + options.thickness - upper.pos.z;
+      if (!upper.pinned) {
+        upper.pos.z += lift;
       }
     }
   }
+
+  const total = w1 + w2;
+  if (total <= EPS) return 0;
+
+  const push1 = (penetration * w1) / total;
+  const push2 = (penetration * w2) / total;
+
+  if (!p1.pinned) {
+    p1.pos.x -= nx * push1;
+    p1.pos.y -= ny * push1;
+    p1.pos.z -= nz * push1;
+  }
+  if (!p2.pinned) {
+    p2.pos.x += nx * push2;
+    p2.pos.y += ny * push2;
+    p2.pos.z += nz * push2;
+  }
+
+  updatePenetration(p1, penetration);
+  updatePenetration(p2, penetration);
+  hitParticles.add(p1);
+  hitParticles.add(p2);
+
+  return penetration;
+}
+
+function resolveParticleEdge(p, edge, options, hitParticles) {
+  if (edge.lastQueryId === p.id) return 0;
+  edge.lastQueryId = p.id;
+
+  if (edge.p1 === p || edge.p2 === p) return 0;
+  if (p.neighbors && (p.neighbors.has(edge.p1) || p.neighbors.has(edge.p2))) {
+    return 0;
+  }
+
+  const ax = edge.p1.pos.x;
+  const ay = edge.p1.pos.y;
+  const az = edge.p1.pos.z;
+  const bx = edge.p2.pos.x;
+  const by = edge.p2.pos.y;
+  const bz = edge.p2.pos.z;
+
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abz = bz - az;
+
+  const apx = p.pos.x - ax;
+  const apy = p.pos.y - ay;
+  const apz = p.pos.z - az;
+
+  const abLenSq = abx * abx + aby * aby + abz * abz;
+  const t = abLenSq <= EPS ? 0 : clamp01((apx * abx + apy * aby + apz * abz) / abLenSq);
+
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+  const cz = az + abz * t;
+
+  const dx = p.pos.x - cx;
+  const dy = p.pos.y - cy;
+  const dz = p.pos.z - cz;
+  const minDist = p.radius + edge.radius + options.slop;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq >= minDist * minDist) return 0;
+
+  const dist = Math.sqrt(distSq) || EPS;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const nz = dz / dist;
+  const penetration = minDist - dist;
+
+  let wP = p.pinned ? 0 : 1;
+  let wE1 = edge.p1.pinned ? 0 : 0.5;
+  let wE2 = edge.p2.pinned ? 0 : 0.5;
+
+  if (options.layerBias && p.noteId !== edge.noteId) {
+    const edgeIsLower = edge.noteId < p.noteId;
+    if (edgeIsLower) {
+      wP *= options.upperLayerWeight;
+      wE1 *= options.lowerLayerWeight;
+      wE2 *= options.lowerLayerWeight;
+      if (p.pos.z < Math.max(edge.p1.pos.z, edge.p2.pos.z) + options.thickness) {
+        p.pos.z = Math.max(edge.p1.pos.z, edge.p2.pos.z) + options.thickness;
+      }
+    } else {
+      wP *= options.lowerLayerWeight;
+      wE1 *= options.upperLayerWeight;
+      wE2 *= options.upperLayerWeight;
+      if (edge.p1.pos.z < p.pos.z + options.thickness && !edge.p1.pinned) {
+        edge.p1.pos.z = p.pos.z + options.thickness;
+      }
+      if (edge.p2.pos.z < p.pos.z + options.thickness && !edge.p2.pinned) {
+        edge.p2.pos.z = p.pos.z + options.thickness;
+      }
+    }
+  }
+
+  const total = wP + wE1 + wE2;
+  if (total <= EPS) return 0;
+
+  const pushP = (penetration * wP) / total;
+  const pushE1 = (penetration * wE1) / total;
+  const pushE2 = (penetration * wE2) / total;
+
+  if (!p.pinned) {
+    p.pos.x += nx * pushP;
+    p.pos.y += ny * pushP;
+    p.pos.z += nz * pushP;
+  }
+  if (!edge.p1.pinned) {
+    edge.p1.pos.x -= nx * pushE1;
+    edge.p1.pos.y -= ny * pushE1;
+    edge.p1.pos.z -= nz * pushE1;
+  }
+  if (!edge.p2.pinned) {
+    edge.p2.pos.x -= nx * pushE2;
+    edge.p2.pos.y -= ny * pushE2;
+    edge.p2.pos.z -= nz * pushE2;
+  }
+
+  updatePenetration(p, penetration);
+  updatePenetration(edge.p1, penetration);
+  updatePenetration(edge.p2, penetration);
+  hitParticles.add(p);
+  hitParticles.add(edge.p1);
+  hitParticles.add(edge.p2);
+
+  return penetration;
+}
+
+function buildSpatialHash(spatialHash, particles, edges, radius) {
+  spatialHash.clear();
+  for (let i = 0; i < particles.length; i += 1) {
+    spatialHash.insertParticle(particles[i]);
+  }
+  for (let i = 0; i < edges.length; i += 1) {
+    spatialHash.insertEdge(edges[i], radius);
+  }
+}
+
+function collisionPass({
+  particles,
+  edges,
+  spatialHash,
+  thickness,
+  radius,
+  slop,
+  layerBias,
+}) {
+  buildSpatialHash(spatialHash, particles, edges, radius + slop);
+
+  const neighbors = [];
+  const edgeNeighbors = [];
+  const hitParticles = new Set();
+  let maxPenetration = 0;
+
+  for (let i = 0; i < particles.length; i += 1) {
+    const p = particles[i];
+    neighbors.length = 0;
+    edgeNeighbors.length = 0;
+    spatialHash.queryParticlesAt(p.pos.x, p.pos.y, neighbors);
+    spatialHash.queryEdgesAt(p.pos.x, p.pos.y, edgeNeighbors);
+
+    for (let j = 0; j < neighbors.length; j += 1) {
+      const other = neighbors[j];
+      if (other === p) continue;
+      if (layerBias && p.noteId === other.noteId) continue;
+      if (!layerBias && p.noteId !== other.noteId) continue;
+      if (!layerBias && p.neighbors && p.neighbors.has(other)) continue;
+      if (other.id < p.id) continue;
+      maxPenetration = Math.max(
+        maxPenetration,
+        resolveParticleParticle(
+          p,
+          other,
+          {
+            slop,
+            thickness,
+            layerBias,
+            lowerLayerWeight: CONFIG.collisions.lowerLayerWeight,
+            upperLayerWeight: CONFIG.collisions.upperLayerWeight,
+          },
+          hitParticles
+        )
+      );
+    }
+
+    for (let j = 0; j < edgeNeighbors.length; j += 1) {
+      const edge = edgeNeighbors[j];
+      if (layerBias && edge.noteId === p.noteId) continue;
+      if (!layerBias && edge.noteId !== p.noteId) continue;
+      maxPenetration = Math.max(
+        maxPenetration,
+        resolveParticleEdge(
+          p,
+          edge,
+          {
+            slop,
+            thickness,
+            layerBias,
+            lowerLayerWeight: CONFIG.collisions.lowerLayerWeight,
+            upperLayerWeight: CONFIG.collisions.upperLayerWeight,
+          },
+          hitParticles
+        )
+      );
+    }
+  }
+
+  return { maxPenetration, hitParticles };
+}
+
+export function resetPenetrations(particles) {
+  for (let i = 0; i < particles.length; i += 1) {
+    particles[i].penetration = 0;
+  }
+}
+
+export function resolveSelfCollisions(particles, edges, spatialHash, thickness) {
+  return collisionPass({
+    particles,
+    edges,
+    spatialHash,
+    thickness,
+    radius: CONFIG.collisionRadius,
+    slop: CONFIG.collisions.slop,
+    layerBias: false,
+  });
+}
+
+export function resolveInterMeshCollisions(particles, edges, spatialHash, thickness) {
+  return collisionPass({
+    particles,
+    edges,
+    spatialHash,
+    thickness,
+    radius: CONFIG.collisionRadius,
+    slop: CONFIG.collisions.slop,
+    layerBias: true,
+  });
+}
+
+export function resolveFinalCollisions(particles, edges, spatialHash, thickness) {
+  const selfResult = collisionPass({
+    particles,
+    edges,
+    spatialHash,
+    thickness,
+    radius: CONFIG.collisionRadius,
+    slop: 0,
+    layerBias: false,
+  });
+  const interResult = collisionPass({
+    particles,
+    edges,
+    spatialHash,
+    thickness,
+    radius: CONFIG.collisionRadius,
+    slop: 0,
+    layerBias: true,
+  });
+
+  const hitParticles = new Set([...selfResult.hitParticles, ...interResult.hitParticles]);
+  return {
+    maxPenetration: Math.max(selfResult.maxPenetration, interResult.maxPenetration),
+    hitParticles,
+  };
 }

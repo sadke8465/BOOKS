@@ -51,9 +51,30 @@
           <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;" />
           <div class="control-group">
             <div class="toggle-row">
-              <span style="font-size: 12px; font-weight: 600;">Show Debug Grid</span>
+              <span style="font-size: 12px; font-weight: 600;">Show Collision Points</span>
               <label class="toggle-switch">
                 <input type="checkbox" id="debugToggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span style="font-size: 12px; font-weight: 600;">Show Collision Radius</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="radiusToggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span style="font-size: 12px; font-weight: 600;">Penetration Heatmap</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="heatmapToggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span style="font-size: 12px; font-weight: 600;">Freeze on Violation</span>
+              <label class="toggle-switch">
+                <input type="checkbox" id="freezeToggle" />
                 <span class="slider"></span>
               </label>
             </div>
@@ -94,6 +115,16 @@
           <div class="control-group">
             <label>Direction Y</label>
             <input type="range" id="windDirY" min="-1" max="1" step="0.1" value="0.4" />
+          </div>
+
+          <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;" />
+
+          <div class="control-group">
+            <label>Simulation</label>
+            <div class="button-row">
+              <button class="btn-secondary" id="pauseBtn">Pause</button>
+              <button class="btn-secondary" id="stepBtn">Step</button>
+            </div>
           </div>
         </div>
 

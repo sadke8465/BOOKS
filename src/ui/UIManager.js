@@ -1,11 +1,13 @@
 // UI manager for tabs, controls, and state updates.
 
 export class UIManager {
-  constructor({ state, camera, onClear, onDebugToggle }) {
+  constructor({ state, camera, onClear, onDebugToggle, onPauseToggle, onStep }) {
     this.state = state;
     this.camera = camera;
     this.onClear = onClear;
     this.onDebugToggle = onDebugToggle;
+    this.onPauseToggle = onPauseToggle;
+    this.onStep = onStep;
 
     this.tabs = document.querySelectorAll(".tab-btn");
     this.contents = document.querySelectorAll(".tab-content");
@@ -102,6 +104,39 @@ export class UIManager {
       this.state.debugMode = event.target.checked;
       this.onDebugToggle(this.state.debugMode);
     });
+
+    document.getElementById("radiusToggle").addEventListener("change", (event) => {
+      this.state.debugShowRadius = event.target.checked;
+      this.onDebugToggle(this.state.debugMode || this.state.debugShowRadius);
+    });
+
+    document.getElementById("heatmapToggle").addEventListener("change", (event) => {
+      this.state.debugHeatmap = event.target.checked;
+      this.onDebugToggle(this.state.debugMode || this.state.debugHeatmap);
+    });
+
+    document.getElementById("freezeToggle").addEventListener("change", (event) => {
+      this.state.freezeOnViolation = event.target.checked;
+    });
+
+    document.getElementById("pauseBtn").addEventListener("click", () => {
+      this.state.paused = !this.state.paused;
+      document.getElementById("pauseBtn").textContent = this.state.paused
+        ? "Resume"
+        : "Pause";
+      if (this.onPauseToggle) {
+        this.onPauseToggle(this.state.paused);
+      }
+    });
+
+    document.getElementById("stepBtn").addEventListener("click", () => {
+      this.state.paused = true;
+      this.state.stepOnce = true;
+      document.getElementById("pauseBtn").textContent = "Resume";
+      if (this.onStep) {
+        this.onStep();
+      }
+    });
   }
 
   syncDefaults() {
@@ -118,6 +153,13 @@ export class UIManager {
     document.getElementById("windDirY").value = this.state.windDirY;
     document.getElementById("meshRes").value = this.state.meshResolution;
     document.getElementById("resVal").innerText = this.state.meshResolution;
+    document.getElementById("debugToggle").checked = this.state.debugMode;
+    document.getElementById("radiusToggle").checked = this.state.debugShowRadius;
+    document.getElementById("heatmapToggle").checked = this.state.debugHeatmap;
+    document.getElementById("freezeToggle").checked = this.state.freezeOnViolation;
+    document.getElementById("pauseBtn").textContent = this.state.paused
+      ? "Resume"
+      : "Pause";
   }
 
   setNotesCount(count) {
